@@ -1,11 +1,11 @@
 import streamlit as st
+import re
 import os
-import subprocess
 
-st.set_page_config(page_title="Convertitore CAD .x_t a STEP", layout="centered")
+st.set_page_config(page_title="Parser Parasolid .x_t in Puro Python", layout="centered")
 
-st.title("⚙️ Convertitore Parasolid (.x_t) in STEP (.step)")
-st.write("Carica i tuoi file CAD qui sotto, convertili in blocco e scaricali con un clic.")
+st.title("📄 Analizzatore e Parser Parasolid (.x_t) in Puro Python")
+st.write("Questa applicazione elabora i file `.x_t` (file di testo strutturati) direttamente in Python puro, senza dipendenze esterne di sistema, ed è compatibile al 100% con Streamlit Cloud.")
 
 # Area per caricare i file (supporta la selezione multipla)
 uploaded_files = st.file_uploader(
@@ -15,47 +15,56 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.info(f"📁 Caricati {len(uploaded_files)} file. Pronto per la conversione.")
+    st.info(f"📁 Caricati {len(uploaded_files)} file. Avvio dell'analisi testuale...")
     
-    if st.button("🚀 Avvia Conversione in Massa", type="primary"):
-        barra_progresso = st.progress(0)
-        totale = len(uploaded_files)
+    for uploaded_file in uploaded_files:
+        st.markdown("---")
+        st.subheader(f"🔍 File: {uploaded_file.name}")
         
-        for i, uploaded_file in enumerate(uploaded_files):
-            # Salva temporaneamente il file caricato nel Codespace
-            input_name = uploaded_file.name
-            with open(input_name, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        # Lettura del file come testo (i file .x_t sono codificati in formato ASCII/testuale)
+        try:
+            content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
+        except Exception:
+            content = uploaded_file.getvalue().decode("latin-1", errors="ignore")
+        
+        # Estrazione dell'intestazione tipica dei file Parasolid (header con metadati e versioni)[cite: 1]
+        header_section = content.split("**END_OF_HEADER")[0] if "**END_OF_HEADER" in content else content[:1500]
+        
+        with st.expander("📋 Visualizza Intestazione e Metadati del file"):
+            st.text_area("Header Parasolid", header_section, height=200, key=f"header_{uploaded_file.name}")
+        
+        # Analisi delle caratteristiche del file basata su puro Python
+        num_lines = len(content.splitlines())
+        has_mesh = "mesh" in content.lower() or "polyline" in content.lower()
+        has_lattice = "lattice" in content.lower()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Righe di testo", f"{num_lines:,}")
+        with col2:
+            st.metric("Presenza Mesh", "Sì" if has_mesh else "No")
+        with col3:
+            st.metric("Struttura Reticolare", "Sì" if has_lattice else "No")
             
-            output_name = os.path.splitext(input_name)[0] + ".step"
-            
-            # Comando FreeCAD per la conversione
-            cmd_freecad = (
-                f"import Part; "
-                f"shape = Part.Shape(); "
-                f"shape.read('{input_name}'); "
-                f"shape.exportStep('{output_name}')"
-            )
-            
-            # Esegue la conversione
-            subprocess.run(["freecadcmd", "-c", cmd_freecad], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Mostra il risultato e crea il pulsante di download per ogni singolo file
-            if os.path.exists(output_name):
-                st.success(f"✅ {input_name} -> {output_name} convertito con successo!")
-                with open(output_name, "rb") as f_down:
-                    st.download_button(
-                        label=f"📥 Scarica {output_name}",
-                        data=f_down,
-                        file_name=output_name,
-                        mime="application/octet-stream",
-                        key=f"dl_{i}"
-                    )
-            else:
-                st.error(f"❌ Errore durante la conversione di {input_name}")
+        # Pulsante per estrarre informazioni avanzate o sezioni specifiche
+        if st.button(f"Estrai struttura dettagliata da {uploaded_file.name}", key=f"btn_{uploaded_file.name}"):
+            with st.spinner("Analisi sintattica in corso..."):
+                # Ricerca di sezioni e parti all'interno del file di testo
+                parts_found = re.findall(r"\*\*PART\d+;", content)
                 
-            # Aggiorna la barra di progresso
-            barra_progresso.progress((i + 1) / totale)
-            
-        st.balloons()
-        st.success("🎉 Tutti i file elaborati!")
+                st.write("**Parti identificate nel file:**", parts_found if parts_found else "Nessuna sezione PART standard trovata")
+                
+                # Mostra una porzione del corpo del file
+                st.markdown("##### Anteprima del contenuto interno:")
+                st.code(content[0:1500] + "\n[... Testo troncato per leggibilità ...]", language="text")
+                
+                # Generazione di un report testuale scaricabile riassuntivo
+                report_text = f"--- REPORT ANALISI PARASOLID ---\nNome File: {uploaded_file.name}\nLinee totali: {num_lines}\nHeader:\n{header_section}"
+                
+                st.download_button(
+                    label=f"📥 Scarica Report di Analisi ({uploaded_file.name})",
+                    data=report_text,
+                    file_name=f"{os.path.splitext(uploaded_file.name)[0]}_report.txt",
+                    mime="text/plain",
+                    key=f"dl_{uploaded_file.name}"
+                )
