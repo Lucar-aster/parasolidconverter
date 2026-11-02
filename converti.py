@@ -1,47 +1,58 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-def converti_tutti_i_file():
-    cartella_corrente = os.getcwd()
-    file_xt = [f for f in os.listdir(cartella_corrente) if f.lower().endswith(('.x_t', '.x_b'))]
-    
-    if not file_xt:
-        print("❌ Nessun file .x_t o .x_b trovato nella cartella corrente.")
-        print("💡 Trascina i tuoi file .x_t nella colonna di sinistra di GitHub e riprova.")
+def find_files(folder):
+    return sorted(
+        p for p in Path(folder).iterdir()
+        if p.is_file() and p.suffix.lower() in {".x_t", ".x_b"}
+    )
+
+def convert_file(input_path: Path, output_dir: Path):
+    output_dir.mkdir(exist_ok=True)
+    output_file = output_dir / f"{input_path.stem}.step"
+
+    freecad_script = (
+        "import Part; "
+        "import sys; "
+        f"shape = Part.Shape(); "
+        f"shape.read(r'{str(input_path)}'); "
+        f"shape.exportStep(r'{str(output_file)}');"
+    )
+
+    try:
+        result = subprocess.run(
+            ["freecadcmd", "-c", freecad_script],
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        if result.returncode == 0 and output_file.exists():
+            return True, str(output_file)
+        return False, (result.stderr or result.stdout or "Conversione fallita")
+    except FileNotFoundError:
+        return False, "FreeCAD non trovato: installa freecadcmd"
+    except subprocess.TimeoutExpired:
+        return False, "Timeout conversione"
+
+def main():
+    folder = Path(".").resolve()
+    files = find_files(folder)
+
+    if not files:
+        print("Nessun file .x_t o .x_b trovato.")
         return
 
-    print(f"📦 Trovati {len(file_xt)} file da convertire...")
+    out_dir = folder / "output"
+    out_dir.mkdir(exist_ok=True)
 
-    for i, file_in in enumerate(file_xt, 1):
-        nome_base = os.path.splitext(file_in)[0]
-        file_out = f"{nome_base}.step"
-        
-        print(f"[{i}/{len(file_xt)}] Convertendo: {file_in} -> {file_out}...")
-        
-        # Script FreeCAD eseguito internamente
-        cmd_freecad = (
-            f"import Part; "
-            f"shape = Part.Shape(); "
-            f"shape.read('{file_in}'); "
-            f"shape.exportStep('{file_out}')"
-        )
-        
-        try:
-            result = subprocess.run(
-                ["freecadcmd", "-c", cmd_freecad],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            if os.path.exists(file_out):
-                print(f"   ✅ OK: Generato {file_out}")
-            else:
-                print(f"   ❌ Errore nella conversione di {file_in}")
-        except Exception as e:
-            print(f"   ❌ Errore inatteso: {e}")
-
-    print("\n🎉 Processo di conversione completato per tutti i file!")
+    for file in files:
+        ok, msg = convert_file(file, out_dir)
+        if ok:
+            print(f"OK: {file.name} -> {out_dir / (file.stem + '.step')}")
+        else:
+            print(f"ERRORE: {file.name} -> {msg}")
 
 if __name__ == "__main__":
-    converti_tutti_i_file()
+    main()
