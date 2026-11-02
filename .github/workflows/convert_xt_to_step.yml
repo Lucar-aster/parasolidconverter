@@ -1,0 +1,32 @@
+name: Convert Parasolid .x_t/.x_b to STEP
+
+on:
+  push:
+    paths:
+      - "**/*.x_t"
+      - "**/*.x_b"
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FreeCAD
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y freecad
+
+      - name: Run conversion script
+        run: |
+          mkdir -p output
+          python3 scripts/convert_xt_to_step.py
+
+      - name: Upload generated STEP files
+        uses: actions/upload-artifact@v4
+        with:
+          name: step-output
+          path: output/
