@@ -1,70 +1,141 @@
-import streamlit as st
-import re
 import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
-st.set_page_config(page_title="Parser Parasolid .x_t in Puro Python", layout="centered")
+import streamlit as st
 
-st.title("📄 Analizzatore e Parser Parasolid (.x_t) in Puro Python")
-st.write("Questa applicazione elabora i file `.x_t` (file di testo strutturati) direttamente in Python puro, senza dipendenze esterne di sistema, ed è compatibile al 100% con Streamlit Cloud.")
 
-# Area per caricare i file (supporta la selezione multipla)
-uploaded_files = st.file_uploader(
-    "Seleziona o trascina i file .x_t o .x_b", 
-    type=["x_t", "x_b", "X_T", "X_B"], 
-    accept_multiple_files=True
+st.set_page_config(
+    page_title="Parasolid .x_t / .x_b -> STEP",
+    page_icon="📦",
+    layout="centered",
 )
 
-if uploaded_files:
-    st.info(f"📁 Caricati {len(uploaded_files)} file. Avvio dell'analisi testuale...")
-    
-    for uploaded_file in uploaded_files:
-        st.markdown("---")
-        st.subheader(f"🔍 File: {uploaded_file.name}")
-        
-        # Lettura del file come testo (i file .x_t sono codificati in formato ASCII/testuale)
-        try:
-            content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        except Exception:
-            content = uploaded_file.getvalue().decode("latin-1", errors="ignore")
-        
-        # Estrazione dell'intestazione tipica dei file Parasolid (header con metadati e versioni)[cite: 1]
-        header_section = content.split("**END_OF_HEADER")[0] if "**END_OF_HEADER" in content else content[:1500]
-        
-        with st.expander("📋 Visualizza Intestazione e Metadati del file"):
-            st.text_area("Header Parasolid", header_section, height=200, key=f"header_{uploaded_file.name}")
-        
-        # Analisi delle caratteristiche del file basata su puro Python
-        num_lines = len(content.splitlines())
-        has_mesh = "mesh" in content.lower() or "polyline" in content.lower()
-        has_lattice = "lattice" in content.lower()
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Righe di testo", f"{num_lines:,}")
-        with col2:
-            st.metric("Presenza Mesh", "Sì" if has_mesh else "No")
-        with col3:
-            st.metric("Struttura Reticolare", "Sì" if has_lattice else "No")
-            
-        # Pulsante per estrarre informazioni avanzate o sezioni specifiche
-        if st.button(f"Estrai struttura dettagliata da {uploaded_file.name}", key=f"btn_{uploaded_file.name}"):
-            with st.spinner("Analisi sintattica in corso..."):
-                # Ricerca di sezioni e parti all'interno del file di testo
-                parts_found = re.findall(r"\*\*PART\d+;", content)
-                
-                st.write("**Parti identificate nel file:**", parts_found if parts_found else "Nessuna sezione PART standard trovata")
-                
-                # Mostra una porzione del corpo del file
-                st.markdown("##### Anteprima del contenuto interno:")
-                st.code(content[0:1500] + "\n[... Testo troncato per leggibilità ...]", language="text")
-                
-                # Generazione di un report testuale scaricabile riassuntivo
-                report_text = f"--- REPORT ANALISI PARASOLID ---\nNome File: {uploaded_file.name}\nLinee totali: {num_lines}\nHeader:\n{header_section}"
-                
-                st.download_button(
-                    label=f"📥 Scarica Report di Analisi ({uploaded_file.name})",
-                    data=report_text,
-                    file_name=f"{os.path.splitext(uploaded_file.name)[0]}_report.txt",
-                    mime="text/plain",
-                    key=f"dl_{uploaded_file.name}"
-                )
+st.title("📦 Convertitore Parasolid (.x_t / .x_b) -> STEP")
+st.caption("Converte file CAD Parasolid in formato STEP usando FreeCAD sul backend.")
+
+# --------------------------------------------------------------------
+# Utility
+# --------------------------------------------------------------------
+
+def find_freecad_cmd():
+    candidates = [
+        "freecadcmd",
+        "/usr/bin/freecadcmd",
+        "/usr/local/bin/freecadcmd",
+        "/opt/FreeCAD/bin/freecadcmd",
+    ]
+
+    for cmd in candidates:
+        if shutil.which(cmd):
+            return cmd
+    return None
+
+
+def convert_xt_to_step(input_file: Path, output_dir: Path):
+    """
+    Converte un file .x_t o .x_b in STEP usando FreeCAD.
+    """
+    freecad_cmd = find_freecad_cmd()
+    if not freecad_cmd:
+        return False, (
+            "FreeCAD non trovato. "
+            "Installa `freecadcmd` nel sistema e assicurati che sia nel PATH."
+        )
+
+    output_file = output_dir / f"{input_file.stem}.step"
+
+    # Script Python eseguito da FreeCAD
+    freecad_script = (
+        "import Part; "
+        "shape = Part.Shape(); "
+        f"shape.read(r'{str(input_file)}'); "
+        f"shape.exportStep(r'{str(output_file)}');"
+    )
+
+    try:
+        result = subprocess.run(
+            [freecad_cmd, "-c", freecad_script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        if result.returncode == 0 and output_file.exists():
+            return True, str(output_file)
+
+        error_text = result.stderr.strip() or result.stdout.strip() or "Conversione fallita senza messaggio di errore."
+        return False, error_text
+
+    except subprocess.TimeoutExpired:
+        return False, "Timeout durante la conversione. Il file potrebbe essere molto grande o invalido."
+    except Exception as e:
+        return False, f"Errore inatteso: {str(e)}"
+
+
+# --------------------------------------------------------------------
+# UI
+# --------------------------------------------------------------------
+
+uploaded_files = st.file_uploader(
+    "Seleziona uno o più file .x_t / .x_b",
+    type=["x_t", "x_b", "X_T", "X_B"],
+    accept_multiple_files=True,
+)
+
+if not uploaded_files:
+    st.info("Carica un file Parasolid (.x_t o .x_b) per iniziare la conversione.")
+    st.markdown("""
+    ### Requisiti
+    - FreeCAD installato con `freecadcmd`
+    - File in formato Parasolid testuale (.x_t / .x_b)
+    - L’applicazione deve essere eseguita su un ambiente con FreeCAD disponibile
+    """)
+    st.stop()
+
+st.success(f"📁 Caricati {len(uploaded_files)} file.")
+
+results = []
+
+for uploaded_file in uploaded_files:
+    st.markdown("---")
+    st.subheader(f"🔍 {uploaded_file.name}")
+
+    # Legge il file in memoria
+    file_bytes = uploaded_file.getvalue()
+
+    # Crea una cartella temporanea per il lavoro
+    temp_dir = Path(tempfile.mkdtemp(prefix="parasolid_convert_"))
+    input_path = temp_dir / uploaded_file.name
+    input_path.write_bytes(file_bytes)
+
+    with st.spinner(f"Conversione di {uploaded_file.name} in corso..."):
+        ok, message = convert_xt_to_step(input_path, temp_dir)
+
+    if ok:
+        output_path = Path(message)
+        st.success(f"✅ Conversione completata: {output_path.name}")
+        st.write(f"File generato: `{output_path.name}`")
+
+        with open(output_path, "rb") as f:
+            st.download_button(
+                label=f"⬇️ Scarica {output_path.name}",
+                data=f.read(),
+                file_name=output_path.name,
+                mime="application/octet-stream",
+            )
+
+    else:
+        st.error(f"❌ Conversione fallita: {message}")
+
+    results.append((uploaded_file.name, ok, message))
+
+st.markdown("---")
+st.subheader("📋 Risultati")
+for nome, ok, msg in results:
+    if ok:
+        st.write(f"- {nome}: conversione riuscita")
+    else:
+        st.write(f"- {nome}: errore - {msg}")
