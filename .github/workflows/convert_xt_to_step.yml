@@ -19,14 +19,70 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y freecad
+          freecadcmd --version
 
-      - name: Run conversion script
+      - name: Prepare output directory
+        run: mkdir -p output
+
+      - name: Convert files to STEP
+        shell: bash
         run: |
-          mkdir -p output
-          python3 scripts/convert_xt_to_step.py
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
 
-      - name: Upload generated STEP files
+          root = Path(".")
+          files = sorted(
+              [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in {".x_t", ".x_b"}]
+          )
+
+          if not files:
+              print("Nessun file .x_t o .x_b trovato nel repository.")
+              sys.exit(0)
+
+          print(f"Trovati {len(files)} file da convertire.")
+
+          for src in files:
+              out_dir = Path("output") / src.parent
+              out_dir.mkdir(parents=True, exist_ok=True)
+
+              out_file = out_dir / f"{src.stem}.step"
+
+              script = (
+                  "import Part; "
+                  "shape = Part.Shape(); "
+                  f"shape.read(r'{str(src)}'); "
+                  f"shape.exportStep(r'{str(out_file)}');"
+              )
+
+              print(f"\n=== Conversione: {src} ===")
+              result = subprocess.run(
+                  ["freecadcmd", "-c", script],
+                  capture_output=True,
+                  text=True
+              )
+
+              if result.stdout.strip():
+                  print(result.stdout.strip())
+              if result.stderr.strip():
+                  print(result.stderr.strip())
+
+              if result.returncode != 0:
+                  print(f"ERRORE: conversione fallita per {src}")
+                  sys.exit(1)
+
+              if not out_file.exists():
+                  print(f"ERRORE: file STEP non creato: {out_file}")
+                  sys.exit(1)
+
+              print(f"OK: {src} -> {out_file}")
+
+          print("\nTutti i file sono stati convertiti correttamente.")
+          PY
+
+      - name: Upload converted files as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: step-output
+          name: converted-step-files
           path: output/
